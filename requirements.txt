@@ -1,0 +1,12 @@
+python-dotenv==1.0.1
+streamlit==1.41.1
+httpx==0.28.1
+faker==33.1.0
+sqlalchemy==2.0.36
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+langchain==0.3.13
+langchain-openai==0.3.3
+langgraph==0.2.60
+chromadb==0.6.3
+openai
