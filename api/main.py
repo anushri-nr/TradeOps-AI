@@ -1,12 +1,15 @@
 """FastAPI backend for TradeOps AI."""
 
+import json
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
 from api.schemas import InvestigationResponse, TradeListItem
 from mcp_tools.db import get_engine
-from workflow.graph import investigate
+from workflow.graph import investigate, stream_investigate
 
 app = FastAPI(
     title="TradeOps AI",
@@ -69,3 +72,33 @@ def run_investigation(trade_id: str):
 
     report = investigate(tid)
     return InvestigationResponse(trade_id=tid, report=report)
+
+
+@app.post("/investigate/{trade_id}/stream")
+def stream_investigation(trade_id: str):
+    """
+    Stream the investigation as newline-delimited JSON events.
+    Each line is a JSON object; see stream_investigate() for event types.
+    """
+    tid = trade_id.upper()
+
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            text("SELECT status FROM trades WHERE trade_id = :tid"),
+            {"tid": tid},
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Trade '{tid}' not found.")
+
+    if row[0] != "FAILED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Trade '{tid}' has status '{row[0]}'. Only FAILED trades can be investigated.",
+        )
+
+    def generate():
+        for event in stream_investigate(tid):
+            yield json.dumps(event) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")

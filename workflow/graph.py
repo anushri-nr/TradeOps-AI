@@ -9,6 +9,7 @@ Graph topology:
 import os
 import json
 import re
+from typing import Generator
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -136,12 +137,8 @@ investigation_graph = _build_graph()
 
 # Public interface 
 
-def investigate(trade_id: str) -> dict:
-    """
-    Run the full investigation workflow for a given trade ID.
-    Returns the InvestigationReport as a plain dict.
-    """
-    initial_state: InvestigationState = {
+def _initial_state(trade_id: str) -> InvestigationState:
+    return {
         "trade_id": trade_id,
         "messages": [
             SystemMessage(content=SYSTEM_PROMPT),
@@ -152,5 +149,46 @@ def investigate(trade_id: str) -> dict:
         ],
         "report": None,
     }
-    result = investigation_graph.invoke(initial_state)
+
+
+def investigate(trade_id: str) -> dict:
+    result = investigation_graph.invoke(_initial_state(trade_id))
     return result["report"]
+
+
+def stream_investigate(trade_id: str) -> Generator[dict, None, None]:
+    """
+    Yield investigation events as they happen.
+
+    Event types emitted:
+      {"type": "tool_call",      "tool": str, "args": dict}
+      {"type": "tool_result",    "tool": str, "preview": str}  # first 300 chars
+      {"type": "writing_report"}
+      {"type": "report",         "data": dict}
+      {"type": "error",          "message": str}
+    """
+    try:
+        for chunk in investigation_graph.stream(_initial_state(trade_id), stream_mode="updates"):
+            node_name = next(iter(chunk))
+            node_output = chunk[node_name]
+
+            if node_name == "agent":
+                for msg in node_output.get("messages", []):
+                    for tc in getattr(msg, "tool_calls", []):
+                        yield {"type": "tool_call", "tool": tc["name"], "args": tc["args"]}
+
+            elif node_name == "tools":
+                for msg in node_output.get("messages", []):
+                    yield {
+                        "type": "tool_result",
+                        "tool": getattr(msg, "name", "unknown"),
+                        "preview": str(msg.content)[:300],
+                    }
+
+            elif node_name == "write_report":
+                yield {"type": "writing_report"}
+                if node_output.get("report"):
+                    yield {"type": "report", "data": node_output["report"]}
+
+    except Exception as exc:
+        yield {"type": "error", "message": str(exc)}

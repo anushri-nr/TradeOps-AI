@@ -1,4 +1,6 @@
-"""Streamlit frontend for TradeOps AI — Wells Fargo theme."""
+"""Streamlit frontend for TradeOps AI."""
+
+import json
 
 import httpx
 import streamlit as st
@@ -185,16 +187,83 @@ def fetch_trades() -> list[dict]:
         return []
 
 
-def run_investigation(trade_id: str) -> dict | None:
-    try:
-        r = httpx.post(f"{API_BASE}/investigate/{trade_id}", timeout=180)
-        r.raise_for_status()
-        return r.json()
-    except httpx.HTTPStatusError as e:
-        st.error(e.response.json().get("detail", str(e)))
-    except Exception as e:
-        st.error(f"Investigation failed: {e}")
-    return None
+def _render_thought_log(thoughts: list[dict], done: bool = False) -> None:
+    TOOL_ICONS = {
+        "get_trade_details":  "📋",
+        "get_execution_logs": "📜",
+        "search_policies":    "🔍",
+    }
+    rows = ""
+    i = 0
+    while i < len(thoughts):
+        t = thoughts[i]
+
+        if t["type"] == "tool_call":
+            icon = TOOL_ICONS.get(t["tool"], "🔧")
+            arg_val = str(next(iter(t["args"].values()), "")) if t["args"] else ""
+            arg_display = f'("{arg_val[:45]}{"…" if len(arg_val) > 45 else ""}")' if arg_val else "()"
+            # look ahead: pair with the immediately following tool_result if present
+            if i + 1 < len(thoughts) and thoughts[i + 1]["type"] == "tool_result":
+                first = thoughts[i + 1]["preview"].split("\n")[0].strip()
+                preview = first[:85] + ("…" if len(first) > 85 else "")
+                result_row = (
+                    f'<div style="margin:2px 0 9px 26px;color:#16A34A;font-size:0.75rem">'
+                    f'✓ {preview}</div>'
+                )
+                i += 2
+            else:
+                result_row = (
+                    f'<div style="margin:2px 0 9px 26px;color:#D97706;font-size:0.75rem">'
+                    f'⟳ running…</div>'
+                )
+                i += 1
+            rows += (
+                f'<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:2px">'
+                f'<span style="line-height:1.5">{icon}</span>'
+                f'<span>'
+                f'<code style="background:#E8E8E8;padding:1px 7px;border-radius:3px;'
+                f'font-size:0.78rem;color:#1A1A1A">{t["tool"]}</code>'
+                f'<span style="color:#767676;font-size:0.77rem"> {arg_display}</span>'
+                f'</span></div>'
+                + result_row
+            )
+
+        elif t["type"] == "tool_result":
+            # only reached when not consumed by the lookahead above (parallel calls)
+            first = t["preview"].split("\n")[0].strip()
+            preview = first[:85] + ("…" if len(first) > 85 else "")
+            rows += (
+                f'<div style="margin:2px 0 9px 26px;color:#16A34A;font-size:0.75rem">'
+                f'✓ {preview}</div>'
+            )
+            i += 1
+
+        elif t["type"] == "writing_report":
+            rows += (
+                f'<div style="color:#767676;font-size:0.8rem;margin:4px 0">'
+                f'📝 Writing investigation report…</div>'
+            )
+            i += 1
+
+        else:
+            i += 1
+
+    footer = (
+        '<div style="color:#16A34A;font-weight:600;font-size:0.8rem;margin-top:6px">'
+        '✅ Investigation complete</div>'
+        if done else
+        '<div style="color:#D97706;font-size:0.75rem;margin-top:6px">⟳  Processing…</div>'
+    )
+
+    st.markdown(
+        f'<div style="background:#F7F7F7;border:1px solid {WF_BORDER};border-radius:4px;'
+        f'padding:14px 18px;font-family:monospace">'
+        f'<div style="font-size:0.65rem;font-weight:700;color:{WF_GRAY};letter-spacing:0.1em;'
+        f'text-transform:uppercase;margin-bottom:12px;padding-bottom:8px;'
+        f'border-bottom:1px solid #E8E8E8">⚡ Agent Reasoning</div>'
+        f'{rows}{footer}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def status_badge(status: str) -> str:
@@ -332,11 +401,59 @@ st.markdown('<h2>Investigation Report</h2>', unsafe_allow_html=True)
 
 if investigate_btn:
     st.session_state.pop("result", None)
-    with st.spinner(f"Investigating {trade['trade_id']} — retrieving evidence and analysing…"):
-        result = run_investigation(trade["trade_id"])
-    if result:
-        st.session_state["result"] = result
+    tid = trade["trade_id"]
+
+    st.markdown(
+        f'<div style="font-size:0.8rem;color:{WF_GRAY};margin-bottom:10px">'
+        f'Investigating <strong style="color:{WF_DARK};font-family:monospace">{tid}</strong>'
+        f'&nbsp;— watch the agent gather evidence in real time</div>',
+        unsafe_allow_html=True,
+    )
+    log_placeholder = st.empty()
+    thoughts: list[dict] = []
+    final_report = None
+
+    try:
+        with httpx.Client() as client:
+            with client.stream(
+                "POST",
+                f"{API_BASE}/investigate/{tid}/stream",
+                timeout=180,
+            ) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if not line.strip():
+                        continue
+                    event = json.loads(line)
+
+                    if event["type"] in ("tool_call", "tool_result", "writing_report"):
+                        thoughts.append(event)
+                        with log_placeholder.container():
+                            _render_thought_log(thoughts, done=False)
+
+                    elif event["type"] == "report":
+                        final_report = event["data"]
+                        with log_placeholder.container():
+                            _render_thought_log(thoughts, done=True)
+
+                    elif event["type"] == "error":
+                        st.error(f"Agent error: {event['message']}")
+                        break
+
+    except httpx.HTTPStatusError as e:
+        try:
+            detail = e.response.json().get("detail", str(e))
+        except Exception:
+            detail = str(e)
+        st.error(detail)
+    except Exception as e:
+        st.error(f"Streaming failed: {e}")
+
+    if final_report:
+        st.session_state["result"] = {"trade_id": tid, "report": final_report}
         st.session_state["result_trade"] = trade
+        st.rerun()
+    st.stop()
 
 result     = st.session_state.get("result")
 result_trade = st.session_state.get("result_trade")
