@@ -1,12 +1,12 @@
 # TradeOps AI
 
-An AI-powered trade operations investigation system. Given a failed trade ID, an autonomous AI agent retrieves the trade record, execution logs, and relevant operational policies, then generates a structured investigation report — root cause, supporting evidence, confidence score, and recommended next steps.
+An AI-powered trade operations investigation system. Given a failed trade ID, an autonomous AI agent retrieves the trade record, execution logs, and relevant operational policies, then generates a structured investigation report: root cause, supporting evidence, confidence score, and recommended next steps.
 
 ---
 
 ## Problem
 
-In financial operations, failed trades create immediate downstream risk: settlement penalties, counterparty disputes, regulatory reporting obligations, and reputational damage. Investigating the root cause of a failure today requires an analyst to manually cross-reference three separate systems — the order management system, the execution log archive, and the policy manual — before they can even begin drafting a resolution. This process takes hours and is highly error-prone under time pressure.
+In financial operations, failed trades create immediate downstream risk: settlement penalties, counterparty disputes, regulatory reporting obligations, and reputational damage. Investigating the root cause of a failure today requires an analyst to manually cross-reference three separate systems: the order management system, the execution log archive, and the policy manual before they can even begin drafting a resolution. This process takes hours and is highly error-prone under time pressure.
 
 TradeOps AI compresses that workflow into under 30 seconds by deploying an autonomous agent that does the cross-referencing automatically and returns a structured, evidence-backed report.
 
